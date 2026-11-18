@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Sorcerers</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101827;color:#f8fafc;font-family:Arial,sans-serif}
+#game{max-width:1000px;margin:0 auto;padding:12px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-size:clamp(20px,4vw,30px);margin:5px 0}.muted{color:#aab7ca;font-size:13px}
+#score{font-size:25px;font-weight:800;background:#1e293b;padding:9px 16px;border-radius:10px}
+nav,.controls,.stats{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+button{background:#26364e;color:white;border:1px solid #52647e;border-radius:9px;padding:10px 13px;font-weight:bold;cursor:pointer}
+button.active,button:hover{background:#1763b5;border-color:#60a5fa}
+#field{display:block;width:100%;height:auto;background:#278448;border:2px solid #dce9dc;border-radius:10px;touch-action:none}
+.info{background:#1e293b;border:1px solid #394b63;border-radius:10px;padding:10px;flex:1;min-width:180px}
+.info strong{display:block;margin-bottom:4px}
+#message{font-weight:bold;text-align:center;padding:9px}
+.padwrap{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;background:#1e293b;border-radius:10px;padding:12px}
+.pad{display:grid;grid-template-columns:repeat(3,46px);gap:4px}.pad button{height:42px;padding:4px}
+.actions{display:grid;grid-template-columns:repeat(2,minmax(75px,1fr));gap:7px}
+.actions button{min-width:78px}
+@media(max-width:430px){#game{padding:6px}.padwrap{justify-content:center}.pad button{width:42px}.pad{grid-template-columns:repeat(3,42px)}}
+</style>
+</head>
+<body>
+<div id="game">
+<header><div><h1>⚽ SOCCER SORCERERS</h1><div class="muted">Playable football game • AI teammates • AI goalkeepers</div></div><div id="score">0 - 0</div></header>
+<nav>
+<button class="active" data-mode="match">🏟️ Match</button>
+<button data-mode="penalty">🥅 Penalties</button>
+<button data-mode="training">🎯 Training</button>
+<button id="start">▶ Start</button>
+<button id="reset">↻ Reset</button>
+</nav>
+<canvas id="field" width="900" height="560" aria-label="Top-down soccer field game"></canvas>
+<div id="message">Choose a mode and press Start!</div>
+<div class="stats">
+ <div class="info"><strong>YOU • #10 STRIKER</strong><span id="playerstats" class="muted">Goals: 0 • Passes: 0 • Steals: 0</span></div>
+ <div class="info"><strong>YOUR TEAM</strong><span class="muted">#1 Goalkeeper • #6 Defender • #8 Midfielder • #7 Winger • #9 Striker</span></div>
+ <div class="info"><strong>OBJECTIVE</strong><span id="objective" class="muted">Score more goals than the red team!</span></div>
+</div>
+<div class="padwrap">
+ <div><strong>Touch movement</strong><div class="pad">
+ <span></span><button data-key="ArrowUp">▲</button><span></span>
+ <button data-key="ArrowLeft">◀</button><button data-key="ArrowDown">▼</button><button data-key="ArrowRight">▶</button>
+ </div></div>
+ <div class="actions">
+ <button data-key="Space">SPACE · PASS</button><button data-key="KeyT">T · STEAL</button>
+ <button data-key="KeyB">B · DRIBBLE</button><button data-key="ShiftLeft">SHIFT · SPRINT</button>
+ <button id="shoot">SHOOT ⚽</button>
+ </div>
+</div>
+<p class="muted">Keyboard: WASD / arrows to move · SPACE pass · T steal · hold B to dribble · SHIFT sprint · click the field or tap SHOOT to shoot toward your pointer. Your AI teammates pass, make runs, defend and shoot. Both teams have goalkeepers.</p>
+</div>
+<script>
+(()=>{
+const canvas=document.getElementById('field'),ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id),W=900,H=560;
+let mode='match',running=false,raf=0,last=0,keys={},pointer={x:850,y:280};
+let score=[0,0],goals=0,passes=0,steals=0,clock=120,notice='KICK OFF!';
+let user,ball,blue,red,blueGK,redGK,dribble=false,shootTarget=0;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const make=(x,y,team,n,pos)=>({x,y,team,n,pos,r:pos==='GK'?19:14,cool:0});
+function resetPositions(){
+ user=make(220,280,0,10,'YOU');
+ ball={x:242,y:280,vx:0,vy:0,owner:null};
+ blue=[make(150,280,0,6,'DEF'),make(355,175,0,8,'MID'),make(390,390,0,7,'WING'),make(510,280,0,9,'ST')];
+ red=[make(460,125,1,3,'DEF'),make(555,220,1,5,'MID'),make(555,355,1,7,'WING'),make(680,280,1,9,'ST')];
+ blueGK=make(45,280,0,1,'GK');redGK=make(855,280,1,1,'GK');
+}
+function fresh(){score=[0,0];goals=passes=steals=0;clock=120;resetPositions();stats();}
+function stats(){$('score').textContent=score[0]+' - '+score[1];$('playerstats').textContent=`Goals: ${goals} • Passes: ${passes} • Steals: ${steals}`;}
+function say(s){notice=s;$('message').textContent=s;}
+function setMode(m){
+ mode=m;running=false;cancelAnimationFrame(raf);fresh();
+ document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===m));
+ $('objective').textContent=m==='match'?'Score more goals than the red team!':m==='penalty'?'Take penalties against the red goalkeeper!':'Practice shooting into the target goal!';
+ say(m==='match'?'MATCH READY!':m==='penalty'?'PENALTY SHOOTOUT!':'TRAINING READY!');
+ draw();$('start').textContent='▶ Start';
+}
+function start(){if(running)return;running=true;last=performance.now();$('start').textContent='⏸ Pause';say('PLAY!');raf=requestAnimationFrame(loop);}
+function move(p,x,y,s,dt){let dx=x-p.x,dy=y-p.y,len=Math.hypot(dx,dy)||1;p.x=clamp(p.x+dx/len*Math.min(s*dt,len),25,875);p.y=clamp(p.y+dy/len*Math.min(s*dt,len),25,535);}
+function carry(p){ball.owner=p;ball.vx=ball.vy=0;ball.x=p.x+(p.team===0?17:-17);ball.y=p.y+3;}
+function resetKickoff(){resetPositions();}
+function passBall(){
+ if(!running||ball.owner!==user)return;
+ const target=blue.filter(p=>p.pos!=='DEF').sort((a,b)=>d(a,user)-d(b,user))[0];
+ if(!target)return;
+ let a=Math.atan2(target.y-user.y,target.x-user.x);ball.owner=null;ball.x=user.x;ball.y=user.y;ball.vx=Math.cos(a)*10;ball.vy=Math.sin(a)*10;passes++;stats();say('PASS TO #'+target.n+'!');
+}
+function steal(){
+ if(!running)return;
+ const enemy=red.filter(p=>p.pos!=='GK').sort((a,b)=>d(a,user)-d(b,user))[0];
+ if(d(enemy,user)<48&&(ball.owner===enemy||d(ball,enemy)<27)){carry(user);steals++;stats();say('GREAT TACKLE! BALL WON!');}
+ else say('Get closer to an opponent with the ball!');
+}
+function shoot(){
+ if(!running)return;
+ if(ball.owner!==user&&d(user,ball)>30){say('Get to the ball first!');return;}
+ let a=Math.atan2(pointer.y-user.y,pointer.x-user.x);
+ ball.owner=null;ball.x=user.x+16;ball.y=user.y;ball.vx=Math.cos(a)*13;ball.vy=Math.sin(a)*13;say('SHOT!');
+}
+function goal(team){
+ score[team]++;if(team===0)goals++;
+ stats();say(team===0?'GOOOOOAL! ⚽':'RED TEAM SCORES!');
+ resetPositions();
+}
+function attemptPass(p){
+ let candidates=(p.team===0?blue:red).filter(q=>q!==p&&q.pos!=='DEF');
+ let target=candidates.sort((a,b)=>d(a,p)-d(b,p))[0];
+ if(!target)return false;
+ let a=Math.atan2(target.y-p.y,target.x-p.x);
+ ball.owner=null;ball.x=p.x;ball.y=p.y;ball.vx=Math.cos(a)*8.5;ball.vy=Math.sin(a)*8.5;
+ p.cool=65;say((p.team===0?'BLUE':'RED')+' TEAM PASS!');return true;
+}
+function aiTeam(list,team,dt){
+ list.forEach((p,i)=>{
+  if(ball.owner===p){
+   let goalX=team===0?820:80,goalY=280;
+   if((team===0?p.x>620:p.x<280)&&Math.abs(p.y-280)<145&&p.cool<=0){
+    ball.owner=null;ball.x=p.x;ball.y=p.y;let a=Math.atan2(280-p.y,goalX-p.x);
+    ball.vx=Math.cos(a)*10.5;ball.vy=Math.sin(a)*10.5;p.cool=80;say('AI TEAMMATE SHOOTS!');
+   }else if(p.cool<=0&&Math.random()<.018*dt){attemptPass(p);}
+   else move(p,team===0?790:110,280+(i-1.5)*35,2.1,dt);
+  }else{
+   let tx,ty;
+   if(ball.owner&&ball.owner.team!==team){tx=ball.x+(team===0?45:-45);ty=ball.y+(i-1.5)*48;}
+   else if(ball.owner&&ball.owner.team===team){tx=team===0?Math.min(770,ball.owner.x+100):Math.max(130,ball.owner.x-100);ty=clamp(ball.owner.y+(i-1.5)*70,45,515);}
+   else{tx=ball.x+(team===0?30:-30);ty=ball.y+(i-1.5)*40;}
+   if(p.pos==='DEF'){tx=team===0?160:740;ty=clamp(ball.y,100,460);}
+   move(p,tx,ty,2.0,dt);
+   if(!ball.owner&&d(p,ball)<20)carry(p);
+   if(ball.owner&&ball.owner.team!==team&&d(p,ball.owner)<20&&p.cool<=0){carry(p);p.cool=35;say('AI TACKLE!');}
+  }
+  p.cool=Math.max(0,p.cool-dt);
+ });
+}
+function goalkeeper(gk,team,dt){
+ let targetY=clamp(ball.y,220,340);
+ move(gk,team===0?45:855,targetY,3.0,dt);
+ if(!ball.owner&&d(gk,ball)<27&&(team===0?ball.x<95:ball.x>805)){
+  ball.owner=null;ball.vx=team===0?5:-5;ball.vy=(280-ball.y)*.08;say('GOALKEEPER SAVE!');
+ }
+ if(ball.owner&&ball.owner.team!==team&&d(gk,ball.owner)<25&&(team===0?ball.x<110:ball.x>790)){
+  let shooter=ball.owner;ball.owner=null;ball.x=gk.x+(team===0?20:-20);ball.y=gk.y;ball.vx=team===0?7:-7;ball.vy=(shooter.y-gk.y)*.15;say('DIVING SAVE!');
+ }
+}
+function loop(now){
+ if(!running)return;let dt=Math.min((now-last)/16.67,2);last=now;
+ if(mode==='match')clock-=dt/60;
+ if(mode==='match'&&clock<=0){clock=0;running=false;$('start').textContent='↻ Play Again';say('FULL TIME!');draw();return;}
+ update(dt);draw();raf=requestAnimationFrame(loop);
+}
+function update(dt){
+ let dx=(keys.ArrowRight||keys.KeyD?1:0)-(keys.ArrowLeft||keys.KeyA?1:0);
+ let dy=(keys.ArrowDown||keys.KeyS?1:0)-(keys.ArrowUp||keys.KeyW?1:0),len=Math.hypot(dx,dy)||1;
+ let speed=(keys.ShiftLeft||keys.ShiftRight)?5:3.3;
+ user.x=clamp(user.x+dx/len*speed*dt,25,875);user.y=clamp(user.y+dy/len*speed*dt,25,535);
+ dribble=!!keys.KeyB;
+ if(ball.owner===user){ball.x=user.x+(dribble?12:19);ball.y=user.y+3;}
+ else if(ball.owner){ball.x=ball.owner.x+(ball.owner.team===0?17:-17);ball.y=ball.owner.y+3;}
+ else{
+  ball.x+=ball.vx*dt;ball.y+=ball.vy*dt;ball.vx*=Math.pow(.986,dt);ball.vy*=Math.pow(.986,dt);
+  if(ball.y<18||ball.y>542){ball.vy*=-.78;ball.y=clamp(ball.y,18,542);}
+  if(ball.x<15||ball.x>885){
+   if(ball.y>215&&ball.y<345){
+    if(mode==='training'){goal(0);}
+    else if(mode==='penalty'){if(Math.abs(ball.y-redGK.y)>34)goal(0);else{say('SAVED! TRY AGAIN!');resetPositions();}}
+    else goal(ball.x>885?0:1);
+   }else{ball.vx*=-.75;ball.x=clamp(ball.x,15,885);}
+  }
+ }
+ if(mode==='penalty'){
+  move(redGK,855,clamp(ball.y,220,340),3.2,dt);
+ }else{
+  aiTeam(blue,0,dt);aiTeam(red,1,dt);goalkeeper(blueGK,0,dt);goalkeeper(redGK,1,dt);
+ }
+ if(!ball.owner){
+  if(d(user,ball)<21)carry(user);
+  [...blue,...red].forEach(p=>{if(!ball.owner&&d(p,ball)<19)carry(p);});
+ }
+}
+function circle(x,y,r,color,stroke='#fff'){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ for(let i=0;i<9;i++){ctx.fillStyle=i%2?'#238044':'#2c9250';ctx.fillRect(i*100,0,100,H);}
+ ctx.strokeStyle='white';ctx.lineWidth=3;ctx.strokeRect(15,15,870,530);ctx.beginPath();ctx.moveTo(450,15);ctx.lineTo(450,545);ctx.stroke();ctx.beginPath();ctx.arc(450,280,75,0,Math.PI*2);ctx.stroke();
+ ctx.strokeRect(15,165,135,230);ctx.strokeRect(750,165,135,230);ctx.strokeRect(15,220,55,120);ctx.strokeRect(830,220,55,120);
+ ctx.fillStyle='#ddd';ctx.fillRect(0,215,15,130);ctx.fillRect(885,215,15,130);
+ if(mode==='training'){ctx.beginPath();ctx.arc(820,280,40,0,Math.PI*2);ctx.strokeStyle='#ffe45c';ctx.lineWidth=5;ctx.stroke();}
+ [...blue,...red].forEach(p=>{circle(p.x,p.y,p.r,p.team===0?'#2054c5':'#df3939');ctx.fillStyle='white';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.fillText(p.n,p.x,p.y+4);});
+ [blueGK,redGK].forEach(p=>{circle(p.x,p.y,19,'#f2c94c','#252525');ctx.fillStyle='#222';ctx.font='bold 10px Arial';ctx.textAlign='center';ctx.fillText('GK',p.x,p.y+4);});
+ circle(user.x,user.y,16,'#1039a0');ctx.fillStyle='white';ctx.font='bold 12px Arial';ctx.textAlign='center';ctx.fillText('10',user.x,user.y+4);
+ circle(ball.x,ball.y,9,'white','#222');circle(ball.x,ball.y,3,'#222','#222');
+ ctx.textAlign='left';ctx.fillStyle='white';ctx.font='bold 16px Arial';ctx.fillText(mode==='match'?'MATCH • '+Math.ceil(clock)+'s':mode==='penalty'?'PENALTY SHOOTOUT':'TRAINING MODE',28,42);
+}
+function down(k){if(!keys[k]){if(k==='Space')passBall();if(k==='KeyT')steal();}keys[k]=true;}
+function up(k){keys[k]=false;}
+window.addEventListener('keydown',e=>{if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();down(e.code);});
+window.addEventListener('keyup',e=>up(e.code));
+canvas.addEventListener('pointermove',e=>{let r=canvas.getBoundingClientRect();pointer.x=(e.clientX-r.left)*W/r.width;pointer.y=(e.clientY-r.top)*H/r.height;});
+canvas.addEventListener('pointerdown',shoot);
+document.querySelectorAll('[data-key]').forEach(b=>{let k=b.dataset.key;b.addEventListener('pointerdown',e=>{e.preventDefault();down(k);});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>up(k)));});
+document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
+$('shoot').onclick=shoot;
+$('start').onclick=()=>{if(running){running=false;cancelAnimationFrame(raf);$('start').textContent='▶ Resume';say('PAUSED');}else start();};
+$('reset').onclick=()=>{fresh();draw();say('RESET!');};
+setMode('match');
+})();
+</script>
+</body>
+</html>
